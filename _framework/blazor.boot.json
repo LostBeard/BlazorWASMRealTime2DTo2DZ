@@ -1,7 +1,7 @@
 {
   "mainAssemblyName": "BlazorWASMRealTime2DTo2DZ",
   "resources": {
-    "hash": "sha256-z9pD1+01mcwS5dQ1D54IxpZDD9vczrDTQHJVJptICGA=",
+    "hash": "sha256-awqfykTWtX9CiV42P1p01yGRX+CV75Gih7mucgdfDVE=",
     "jsModuleNative": {
       "dotnet.native.js": "sha256-AnPQtEN9rGUfgtP7261KjemEatISV2rDxhwf960lvG0="
     },
@@ -58,7 +58,7 @@
       "System.Text.RegularExpressions.wasm": "sha256-c3h/tTlNHa9/zCgO13AliAsb9i05sxT4DJRpM1SouQI=",
       "System.Threading.wasm": "sha256-uEADCjlSlo/6vVBIX8IqabSf+UEtazcpcP5TNzWVyVw=",
       "System.Private.CoreLib.wasm": "sha256-Qyq+FxOSeyAwI053VZ2eVOAPSMDhmr5PeDSHQ5I0oSY=",
-      "BlazorWASMRealTime2DTo2DZ.wasm": "sha256-kbxfhtiHtSwwEkDLQseVdJaa7q8pGmrx7PCXc9lbUKA="
+      "BlazorWASMRealTime2DTo2DZ.wasm": "sha256-JBI1XJ6DgtX4siLLAkPNsiE5MCsHwC+pPipGtkk8Mwc="
     },
     "libraryInitializers": {
       "SpawnDev.BlazorJS.1kohsulca1.lib.module.js": "sha256-b0WR5Fb08OK+FgLPLG33kE1Pca2blPel5Q4FZnjb5W0="
