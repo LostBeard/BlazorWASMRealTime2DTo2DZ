@@ -1,0 +1,207 @@
+﻿@page "/"
+@using SpawnDev.BlazorJS
+@using SpawnDev.BlazorJS.JSObjects
+@using System.Diagnostics
+@using SpawnDev.BlazorJS.TransformersJS
+@implements IDisposable
+
+<div>
+    <div>
+        In this demo, each webcam video frame is converted to 2D+Z using <a href="https://github.com/huggingface/transformers.js/">Transformers.js</a> and <a href="https://developer.mozilla.org/en-US/docs/Web/API/TransformStream">TransformStream</a>.
+    </div>
+    <div>
+        <video width="640" @ref=videoRef autoplay muted playsinline controls></video>
+    </div>
+    <div id="controls">
+        <div title="Process frames at a lower size (lower = faster)">
+            <label>Scale</label>
+            (<label>@(Math.Round(scale, 2))</label>)
+            <br />
+            <input @ref=scaleRef type="range" min="0.1" max="1" step="0.05" value="@scale" />
+        </div>
+        <div>FPS: @fps</div>
+    </div>
+</div>
+
+@code {
+    [Inject]
+    BlazorJSRuntime JS { get; set; } = default!;
+
+    MediaStream? stream = null;
+    TransformStreamCallbacks? transformerCallbacks = null;
+    TransformStream? transformStream = null;
+    Task? transformerTask = null;
+    ElementReference videoRef;
+    ElementReference scaleRef;
+    HTMLInputElement? scaleEl;
+    HTMLVideoElement? video;
+    Window? window = null;
+    string model = "onnx-community/depth-anything-v2-small";
+    bool UseWebGPU = true;
+    DepthEstimationPipeline? pipeline = null;
+    double scale = 0.5d;
+    double fps = 0;
+    Stopwatch sw = Stopwatch.StartNew();
+
+    Dictionary<string, ModelLoadProgress> ModelProgresses = new();
+    ActionCallback<ModelLoadProgress>? OnProgress = null;
+    void Pipeline_OnProgress(ModelLoadProgress obj)
+    {
+        if (obj.File != null)
+        {
+            if (ModelProgresses.TryGetValue(obj.File, out var progress))
+            {
+                progress.Status = obj.Status;
+                if (obj.Progress != null) progress.Progress = obj.Progress;
+                if (obj.Total != null) progress.Total = obj.Total;
+                if (obj.Loaded != null) progress.Loaded = obj.Loaded;
+            }
+            else
+            {
+                ModelProgresses[obj.File] = obj;
+            }
+        }
+        StateHasChanged();
+    }
+    void Scale_OnChange()
+    {
+        if (scaleEl == null) return;
+        if (double.TryParse(scaleEl.Value, out var s))
+        {
+            scale = s;
+            StateHasChanged();
+        }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            window = JS.Get<Window>("window");
+            video = new HTMLVideoElement(videoRef);
+
+            var transformers = await Transformers.Init();
+
+            scaleEl = new HTMLInputElement(scaleRef);
+            scaleEl.OnChange += Scale_OnChange;
+
+            OnProgress ??= new ActionCallback<ModelLoadProgress>(Pipeline_OnProgress);
+            pipeline = await transformers.DepthEstimationPipeline(model, new PipelineOptions { Device = UseWebGPU ? "webgpu" : null, OnProgress = OnProgress });
+
+            transformerCallbacks = new TransformStreamCallbacks(transform:  Transformer_Transform);
+            // Start the video stream
+            using var navigator = JS.Get<Navigator>("navigator");
+            stream = await navigator.MediaDevices.GetUserMedia(new { video = true });
+            if (stream != null)
+            {
+                using var inputTrack = stream.GetFirstVideoTrack();
+                using var processor = new MediaStreamTrackProcessor(new MediaStreamTrackProcessorOptions { Track = inputTrack });
+                using var generator = new MediaStreamTrackGenerator(new MediaStreamTrackGeneratorOptions { Kind = "video" });
+
+                transformStream = new TransformStream(transformerCallbacks);
+                // Pipe the processor through the transformer to the generator
+                transformerTask = processor.Readable.PipeThrough(transformStream).PipeTo(generator.Writable);
+
+                // Display the output stream in the video element
+                video.SrcObject = new MediaStream([generator]);
+                await video.Play();
+            }
+        }
+    }
+    async Task Transformer_Transform(VideoFrame rgbFrame, TransformStreamDefaultController controller)
+    {
+        try
+        {
+            var rgbWidth = rgbFrame.DisplayWidth;
+            var rgbHeight = rgbFrame.DisplayHeight;
+
+            // Create an OffscreenCanvas to draw the VideoFrame
+            var depthWidth = (int)(rgbWidth * scale);
+            var depthHeight = (int)(rgbHeight * scale);
+            using var rgbCanvas = new OffscreenCanvas(depthWidth, depthHeight);
+            using var rgbCtx = rgbCanvas.Get2DContext();
+            rgbCtx.DrawImage(rgbFrame, 0, 0, depthWidth, depthHeight);
+
+            // Convert the OffscreenCanvas to a RawImage for processing
+            using var rgbImage = RawImage.FromCanvas(rgbCanvas);
+
+            // Run the depth estimation pipeline on the RGB image
+            using var depthResult = await pipeline!.Call(rgbImage);
+
+            // Merge the 2D image and the depth result into a single canvas
+            using var rgbZCanvas = Merge2DWithDepthToCanvas2DZ(rgbCanvas, depthResult);
+
+            // Create a new VideoFrame with the processed bitmap
+            using var rgbZFrame = new VideoFrame(rgbZCanvas, new VideoFrameOptions
+            {
+                Timestamp = rgbFrame.Timestamp,
+                Duration = rgbFrame.Duration,
+            });
+
+            // Enqueue the new frame into the output stream
+            controller.Enqueue(rgbZFrame);
+
+            // update fps
+            var elapsedMS = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+            fps = elapsedMS > 0d ? 1000d / elapsedMS : 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error processing video frame: {ex.Message}");
+        }
+        finally
+        {
+            rgbFrame.Close(); // Dispose the VideoFrame to free resources
+        }
+    }
+    OffscreenCanvas Merge2DWithDepthToCanvas2DZ(OffscreenCanvas rgbCanvas, DepthEstimationResult depthEstimationResult)
+    {
+        using var depthEstimation = depthEstimationResult.Depth;
+        using var grayscale1BPPData = depthEstimation.Data;
+        var width = rgbCanvas.Width;
+        var height = rgbCanvas.Height;
+        var outWidth = width * 2;
+        var outHeight = height;
+        var grayscaleDataBytes = grayscale1BPPData.ReadBytes();
+        var depthmapRGBABytes = Grayscale1BPPToRGBA(grayscaleDataBytes, width, height);
+        var canvas = new OffscreenCanvas(outWidth, outHeight);
+        using var ctx = canvas.Get2DContext();
+        // draw rgb image
+        ctx.DrawImage(rgbCanvas);
+        // draw depth map
+        ctx.PutImageBytes(depthmapRGBABytes, width, height, width, 0);
+        return canvas;
+    }
+    byte[] Grayscale1BPPToRGBA(byte[] grayscaleData, int width, int height)
+    {
+        var ret = new byte[width * height * 4];
+        for (var i = 0; i < grayscaleData.Length; i++)
+        {
+            var grayValue = grayscaleData[i];
+            ret[i * 4] = grayValue;     // Red
+            ret[i * 4 + 1] = grayValue; // Green
+            ret[i * 4 + 2] = grayValue; // Blue
+            ret[i * 4 + 3] = 255;       // Alpha
+        }
+        return ret;
+    }
+    public void Dispose()
+    {
+        // Clean up resources if necessary
+        if (stream != null)
+        {
+            stream.StopAllTracks();
+            stream.Dispose();
+        }
+        if (scaleEl != null)
+        {
+            scaleEl.OnChange -= Scale_OnChange;
+            scaleEl.Dispose();
+            scaleEl = null;
+        }
+        video?.Dispose();
+        window?.Dispose();
+        transformStream?.Dispose();
+        transformerCallbacks?.Dispose();
+    }
+}
