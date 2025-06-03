@@ -231,11 +231,12 @@
         var grayscaleDataBytes = grayscale1BPPData.ReadBytes();
         // Convert the 1BPP grayscale data to RGBA format
         var depthmapRGBABytes = Grayscale1BPPToRGBA(grayscaleDataBytes, depthWidth, depthHeight);
-        // Create an ImageData object from the RGBA bytes
+        // Create an ImageData object from the depth bytes
         using var depthImageData = ImageData.FromBytes(depthmapRGBABytes, depthWidth, depthHeight);
-        // Create an OffscreenCanvas for the depth map
+        // Create an OffscreenCanvas for the depth map ImageData
         using var depthCanvas = new OffscreenCanvas(depthWidth, depthHeight);
         using var depthCtx = depthCanvas.Get2DContext();
+        // Draw the depth map ImageData onto the OffscreenCanvas
         depthCtx.PutImageData(depthImageData, 0, 0);
         // Create an OffscreenCanvas for the final output
         var canvas = new OffscreenCanvas(outWidth, outHeight);
